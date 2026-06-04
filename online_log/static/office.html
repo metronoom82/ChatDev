@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bit Office — ChatDev</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0f;color:#e0e0e0;font-family:Inter,system-ui,sans-serif;overflow:hidden;height:100vh}
+.topbar{background:#111118;border-bottom:1px solid rgba(255,255,255,.06);padding:10px 20px;display:flex;align-items:center;gap:16px;z-index:10}
+.topbar h1{font-size:16px;color:#d4a843;font-weight:700}
+.topbar .status{font-size:12px;color:#6b6b80;margin-left:auto}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:6px}
+.dot-green{background:#34d399}.dot-red{background:#f87171}.dot-yellow{background:#fbbf23}
+#office{flex:1;position:relative;overflow:hidden;background:radial-gradient(ellipse at center,#1a1a2e 0%,#0a0a0f 70%)}
+.agent{position:absolute;transition:all .6s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;align-items:center;gap:6px;z-index:1}
+.agent:hover{z-index:10;transform:scale(1.05)}
+.bubble{background:rgba(20,20,40,.95);border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:10px 16px;max-width:200px;font-size:12px;line-height:1.4;text-align:center;backdrop-filter:blur(12px);box-shadow:0 8px 32px rgba(0,0,0,.4);transition:all .4s ease}
+.bubble.working{border-color:rgba(255,200,50,.4);box-shadow:0 0 20px rgba(255,200,50,.15)}
+.bubble.done{border-color:rgba(52,211,153,.4);box-shadow:0 0 20px rgba(52,211,153,.15)}
+.agent-icon{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;transition:all .4s ease}
+.agent-name{font-size:11px;color:#888;text-align:center}
+.status-dot{width:8px;height:8px;border-radius:50%;position:absolute;top:-2px;right:-2px;border:2px solid #0a0a0f}
+.status-idle{background:#6b6b80}
+.status-working{background:#fbbf23;animation:pulse 1s infinite}
+.status-done{background:#34d399}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.spark{position:absolute;width:4px;height:4px;background:#fbbf23;border-radius:50%;animation:spark-fly 1.5s ease-out forwards;pointer-events:none}
+@keyframes spark-fly{0%{opacity:1;transform:translate(0,0) scale(1)}100%{opacity:0;transform:translate(var(--dx),var(--dy)) scale(0)}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>🏢 Bit Office</h1>
+  <span id="agentCount">0 agents</span>
+  <span class="status"><span class="dot dot-yellow" id="wsDot"></span><span id="wsStatus">Connecting...</span></span>
+</div>
+<div id="office"></div>
+
+<script>
+const WS_URL = '/ws/office';
+const office = document.getElementById('office');
+const wsDot = document.getElementById('wsDot');
+const wsStatus = document.getElementById('wsStatus');
+const agentCount = document.getElementById('agentCount');
+let agents = {};
+let reconnectTimer = null;
+
+function connect() {
+  wsStatus.textContent = 'Connecting...';
+  wsDot.className = 'dot dot-yellow';
+  const ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    wsStatus.textContent = 'Connected';
+    wsDot.className = 'dot dot-green';
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'agent.action') {
+        updateAgent(msg);
+      }
+    } catch(err) { console.log('parse error:', err); }
+  };
+
+  ws.onclose = () => {
+    wsStatus.textContent = 'Disconnected — retrying...';
+    wsDot.className = 'dot dot-red';
+    reconnectTimer = setTimeout(connect, 3000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+function updateAgent(msg) {
+  const a = msg;
+  if (!agents[a.agentId]) {
+    agents[a.agentId] = createAgentElement(a);
+  }
+  const el = agents[a.agentId];
+
+  // Position (center-based coordinates)
+  const cx = office.clientWidth / 2;
+  const cy = office.clientHeight / 2;
+  el.style.left = (cx + (a.worldX || 0)) + 'px';
+  el.style.top = (cy + (a.worldY || 0)) + 'px';
+
+  // Name
+  const nameEl = el.querySelector('.agent-name');
+  if (nameEl) nameEl.textContent = a.name;
+
+  // Icon color
+  const iconEl = el.querySelector('.agent-icon');
+  if (iconEl && a.color) iconEl.style.background = a.color;
+
+  // Bubble text + status
+  const bubble = el.querySelector('.bubble');
+  const statusDot = el.querySelector('.status-dot');
+  if (bubble) {
+    bubble.textContent = a.lastAction || '🟢 Idle';
+    bubble.className = 'bubble ' + (a.status || 'idle');
+  }
+  if (statusDot) {
+    statusDot.className = 'status-dot status-' + (a.status || 'idle');
+  }
+
+  // Spark effect on status change
+  if (a.status === 'working') {
+    spawnSpark(el);
+  }
+
+  agentCount.textContent = Object.keys(agents).length + ' agents';
+}
+
+function createAgentElement(a) {
+  const div = document.createElement('div');
+  div.className = 'agent';
+  div.innerHTML = `
+    <div class="bubble">${a.lastAction || '🟢 Ready'}</div>
+    <div class="agent-icon" style="background:${a.color || '#4f46e5'};position:relative">
+      ${(a.name || '?')[0].toUpperCase()}
+      <div class="status-dot status-idle"></div>
+    </div>
+    <div class="agent-name">${a.name || 'Agent'}</div>
+  `;
+  office.appendChild(div);
+  return div;
+}
+
+function spawnSpark(el) {
+  for (let i = 0; i < 6; i++) {
+    const spark = document.createElement('div');
+    spark.className = 'spark';
+    spark.style.setProperty('--dx', (Math.random()*60-30) + 'px');
+    spark.style.setProperty('--dy', (Math.random()*60-30) + 'px');
+    spark.style.left = (Math.random()*20) + 'px';
+    spark.style.top = (Math.random()*20) + 'px';
+    el.querySelector('.agent-icon').appendChild(spark);
+    setTimeout(() => spark.remove(), 1500);
+  }
+}
+
+connect();
+</script>
+</body>
+</html>
